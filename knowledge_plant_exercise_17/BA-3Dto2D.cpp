@@ -2,19 +2,20 @@
  * 题目：给定一组世界坐标系下的3D点(p3d.txt)以及它在相机中对应的坐标(p2d.txt)，以及相机的内参矩阵。
  * 使用bundle adjustment 方法（g2o库实现）来估计相机的位姿T。初始位姿T为单位矩阵。
  *
-* 本程序学习目标：
+ * 本程序学习目标：
  * 熟悉g2o库编写流程，熟悉顶点定义方法。
  *
  * 公众号：计算机视觉life。发布于公众号旗下知识星球：从零开始学习SLAM
  * 时间：2019.02
 ****************************/
 
+/****************************
+ * 头文件
+****************************/
 #include <vector>
 #include <fstream>
 #include <iostream>
 #include <opencv2/core/core.hpp>
-
-
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
@@ -26,15 +27,21 @@
 #include <g2o/types/sba/types_six_dof_expmap.h>
 
 using namespace Eigen;
-
 using namespace cv;
 using namespace std;
-
 
 string p3d_file = "../p3d.txt";
 string p2d_file = "../p2d.txt";
 
-// 自定义模型的顶点，模板参数：优化变量维度和数据类型
+/****************************
+ * 自定义模型的顶点，需要自己定义的内容是：
+ * 1.优化变量维度，这里是指g2o::BaseVertex<6,g2o::SE3Quat>里面的6
+ * 2.数据类型，这里是指g2o::BaseVertex<6,g2o::SE3Quat>里面的SE3Quat
+ * 3.函数read，
+ * 4.函数write
+ * 5.函数setToOriginImpl，用来设定初值，一定要重写
+ * 6.函数oplusImpl，加法定义，用来计算估计值的加法运算，一定要重写
+****************************/
 // 为什么相机位姿顶点类VertexSE3Expmap使用了李代数表示相机位姿，而不是使用旋转矩阵和平移矩阵？
 // 这是因为旋转矩阵是有约束的矩阵，它必须是正交矩阵且行列式为1。使用它作为优化变量就会引入额外的约束条件，
 // 从而增大优化的复杂度。而将旋转矩阵通过李群-李代数之间的转换关系转换为李代数表示，
@@ -67,6 +74,94 @@ public:
     }
 };
 
+/****************************
+ * 自定义边，根据边的模板定义，template <int D, typename E, typename VertexXi, typename VertexXj>
+ * 其中
+ *    D: 误差自由度，这里是比较像素坐标差值，一共2个自由度，x,y
+ *    E: 误差数据类型，这里是像素坐标值，用g2o::Vector2表示
+ * 2.数据类型，这里是指g2o::BaseVertex<6,g2o::SE3Quat>里面的SE3Quat
+ * 3.函数read，
+ * 4.函数write
+ * 5.函数setToOriginImpl，用来设定初值，一定要重写
+ * 6.函数oplusImpl，加法定义，用来计算估计值的加法运算，一定要重写
+****************************/
+class myEdgeProjectXYZ2UV
+        : public g2o::BaseBinaryEdge<2, g2o::Vector2, g2o::VertexPointXYZ, g2o::VertexSE3Expmap> {
+public:
+    myEdgeProjectXYZ2UV() {
+        _cam = 0;
+        resizeParameters(1);
+        installParameter(_cam, 0);
+    }
+
+    virtual bool read(std::istream &is) {}
+
+    virtual bool write(std::ostream &os) const {}
+
+    // computeError函数是使用当前顶点的值计算的测量值与真实的测量值之间的误差
+    virtual void computeError() {
+        const g2o::VertexSE3Expmap *v1 = static_cast<const g2o::VertexSE3Expmap *>(_vertices[1]);
+        const g2o::VertexPointXYZ *v2 = static_cast<const g2o::VertexPointXYZ *>(_vertices[0]);
+        const g2o::CameraParameters *cam = static_cast<const g2o::CameraParameters *>(parameter(0));
+        // v1->estimate().map(v2->estimate()) 就是
+        // |Xc|       |Xw|
+        // |Yc| = R * |Yw| + t
+        // |Zc|       |Zw|
+        // cam_map 就是把
+        // |u|   |1/dx   0   u0|   |f * Xc/Zc|
+        // |v| = | 0   1/dy  v0| * |f * Yc/Zc|
+        // |1|   | 0     0    1|   |    1    |
+        _error = measurement() - cam->cam_map(v1->estimate().map(v2->estimate()));
+    }
+
+    // linearizeOplus函数是在当前顶点的值下，该误差对优化变量的偏导数，即jacobian
+    virtual void linearizeOplus() {
+        // SE3 -> vj
+        g2o::VertexSE3Expmap *vj = static_cast<g2o::VertexSE3Expmap *>(_vertices[1]);
+        g2o::SE3Quat T(vj->estimate());
+        //  Xw -> vi
+        g2o::VertexPointXYZ *vi = static_cast<g2o::VertexPointXYZ *>(_vertices[0]);
+        g2o::Vector3 xyz = vi->estimate();
+        //  Xc = R * Xw + t
+        g2o::Vector3 xyz_trans = T.map(xyz);
+
+        // Camera coordinate
+        number_t x = xyz_trans[0];
+        number_t y = xyz_trans[1];
+        number_t z = xyz_trans[2];
+        number_t z_2 = z * z;
+
+        const g2o::CameraParameters *cam = static_cast<const g2o::CameraParameters *>(parameter(0));
+
+        Eigen::Matrix<number_t, 2, 3, Eigen::ColMajor> tmp;
+        tmp(0, 0) = cam->focal_length;
+        tmp(0, 1) = 0;
+        tmp(0, 2) = -x / z * cam->focal_length;
+
+        tmp(1, 0) = 0;
+        tmp(1, 1) = cam->focal_length;
+        tmp(1, 2) = -y / z * cam->focal_length;
+
+        _jacobianOplusXi = -1. / z * tmp * T.rotation().toRotationMatrix();
+
+        _jacobianOplusXj(0, 0) = x * y / z_2 * cam->focal_length;
+        _jacobianOplusXj(0, 1) = -(1 + (x * x / z_2)) * cam->focal_length;
+        _jacobianOplusXj(0, 2) = y / z * cam->focal_length;
+        _jacobianOplusXj(0, 3) = -1. / z * cam->focal_length;
+        _jacobianOplusXj(0, 4) = 0;
+        _jacobianOplusXj(0, 5) = x / z_2 * cam->focal_length;
+
+        _jacobianOplusXj(1, 0) = (1 + y * y / z_2) * cam->focal_length;
+        _jacobianOplusXj(1, 1) = -x * y / z_2 * cam->focal_length;
+        _jacobianOplusXj(1, 2) = -x / z * cam->focal_length;
+        _jacobianOplusXj(1, 3) = 0;
+        _jacobianOplusXj(1, 4) = -1. / z * cam->focal_length;
+        _jacobianOplusXj(1, 5) = y / z_2 * cam->focal_length;
+    }
+
+public:
+    g2o::CameraParameters *_cam;
+};
 
 void bundleAdjustment(
         const vector<Point3f> points_3d,
@@ -74,15 +169,12 @@ void bundleAdjustment(
         Mat &K);
 
 int main(int argc, char **argv) {
-
-
     vector<Point3f> p3d;
     vector<Point2f> p2d;
 
     Mat K = (Mat_<double>(3, 3) << 520.9, 0, 325.1, 0, 521.0, 249.7, 0, 0, 1);
 
     // 导入3D点和对应的2D点
-
     ifstream fp3d(p3d_file);
     if (!fp3d) {
         cout << "No p3d.text file" << endl;
@@ -172,7 +264,6 @@ void bundleAdjustment(
     }
     // ----------------------结束你的代码
 
-
     // 设置相机内参
     g2o::CameraParameters *camera = new g2o::CameraParameters(
             K.at<double>(0, 0), Eigen::Vector2d(K.at<double>(0, 2), K.at<double>(1, 2)), 0);
@@ -182,7 +273,7 @@ void bundleAdjustment(
     // 设置边
     index = 1;
     for (const Point2f p:points_2d) {
-        g2o::EdgeProjectXYZ2UV *edge = new g2o::EdgeProjectXYZ2UV();
+        myEdgeProjectXYZ2UV *edge = new myEdgeProjectXYZ2UV();
         edge->setId(index);
         edge->setVertex(0, dynamic_cast<g2o::VertexPointXYZ *> ( optimizer.vertex(index)));
         edge->setVertex(1, pose);
@@ -192,7 +283,6 @@ void bundleAdjustment(
         optimizer.addEdge(edge);
         index++;
     }
-
 
     // 第6步：设置优化参数，开始执行优化
     optimizer.setVerbose(false);
