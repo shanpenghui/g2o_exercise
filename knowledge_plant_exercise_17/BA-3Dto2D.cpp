@@ -140,7 +140,7 @@ public:
 
         tmp(1, 0) = 0;
         tmp(1, 1) = cam->focal_length;
-        tmp(1, 2) = -y / z * cam->focal_length;
+        tmp(1, 2) = -y / z * cam->focal_length;METHODS FOR NON-LINEAR LEAST SQUARES PROBLEMS
 
         _jacobianOplusXi = -1. / z * tmp * T.rotation().toRotationMatrix();
 

@@ -60,6 +60,9 @@ public:
         return observations_[index];
     }
 
+    std::vector<Vector9d> cameras_;
+    std::vector<Eigen::Vector3d> points_;
+
 private:
     std::string file_name_;
 
@@ -67,8 +70,6 @@ private:
     int num_points_;
     int num_observations_;
 
-    std::vector<Vector9d> cameras_;
-    std::vector<Eigen::Vector3d> points_;
     std::vector<Observation> observations_;
 };
 

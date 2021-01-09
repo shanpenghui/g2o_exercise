@@ -52,7 +52,7 @@ SET(G2O_LIBS g2o_cli g2o_ext_freeglut_minimal g2o_simulator
 add_executable(BA_large main.cpp data.cpp BundleAdjustment.cpp)
 
 if(CHOLMOD_FOUND)
-    target_link_libraries(BA_large ${OpenCV_LIBS} ${G2O_LIBS} ${SuiteSparse_LIBRARIES})
+    target_link_libraries(BA_large ${OpenCV_LIBS} ${G2O_LIBS} ${SuiteSparse_LIBRARIES} cholmod)
 else()
     target_link_libraries(BA_large ${OpenCV_LIBS} ${G2O_LIBS} solver_eigen)
 endif()

@@ -11,6 +11,10 @@ BUNDLEADJUSTMENT::BUNDLEADJUSTMENT() {
 
 BUNDLEADJUSTMENT::BUNDLEADJUSTMENT(std::string file_name) : data_(file_name) {}
 
+BUNDLEADJUSTMENT::~BUNDLEADJUSTMENT() {
+
+}
+
 //void BUNDLEADJUSTMENT::bundleAdjustment(
 //        const std::vector <cv::Point3f> points_3d,
 //        const std::vector <cv::Point2f> points_2d,
